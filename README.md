@@ -2,6 +2,8 @@
 
 This repository is an instructional skeleton for building the complete visual perception pipeline on Oxford-IIIT Pet.
 
+Updated runnable instructions for this local setup are in `RUNBOOK.md`.
+
 
 ### ADDITIONAL INSTRUCTIONS FOR ASSIGNMENT2:
 - Ensure VGG11 is implemented according to the official paper(https://arxiv.org/abs/1409.1556). The only difference being injecting BatchNorm and CustomDropout layers is your design choice.

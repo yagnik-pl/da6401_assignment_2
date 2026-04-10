@@ -1,29 +1,25 @@
-"""Custom IoU loss 
-"""
+"""Custom IoU loss."""
 
 import torch
 import torch.nn as nn
 
+from common import box_iou_xywh
+
+
 class IoULoss(nn.Module):
-    """IoU loss for bounding box regression.
-    """
+    """IoU loss for bounding box regression."""
 
     def __init__(self, eps: float = 1e-6, reduction: str = "mean"):
-        """
-        Initialize the IoULoss module.
-        Args:
-            eps: Small value to avoid division by zero.
-            reduction: Specifies the reduction to apply to the output: 'mean' | 'sum'.
-        """
         super().__init__()
+        if reduction not in {"none", "mean", "sum"}:
+            raise ValueError(f"Unsupported reduction '{reduction}'. Use 'none', 'mean', or 'sum'.")
         self.eps = eps
         self.reduction = reduction
-        # TODO: validate reduction in {"none", "mean", "sum"}.
 
     def forward(self, pred_boxes: torch.Tensor, target_boxes: torch.Tensor) -> torch.Tensor:
-        """Compute IoU loss between predicted and target bounding boxes.
-        Args:
-            pred_boxes: [B, 4] predicted boxes in (x_center, y_center, width, height) format.
-            target_boxes: [B, 4] target boxes in (x_center, y_center, width, height) format."""
-        # TODO: implement IoU loss.
-        raise NotImplementedError("Implement IoULoss.forward")
+        losses = 1.0 - box_iou_xywh(pred_boxes, target_boxes, eps=self.eps).clamp(0.0, 1.0)
+        if self.reduction == "none":
+            return losses
+        if self.reduction == "sum":
+            return losses.sum()
+        return losses.mean()
