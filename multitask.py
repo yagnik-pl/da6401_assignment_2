@@ -15,78 +15,58 @@ from .segmentation import VGG11UNet
 # ---------------------------------------------------------------------------
 # Checkpoint auto-download helpers
 # ---------------------------------------------------------------------------
-_GDRIVE_FOLDER_ID = "1nqjV4rr5G01x0oG7LyTrEmpMD6a8D8jU"
+_CHECKPOINT_GDRIVE_IDS = {
+    "classifier.pth": "1jJ3TOA4pAquLZjp6EThjDByvNIFSYFrN",
+    "localizer.pth":  "1JWIJfl904i02HEvKQJabr_m1iGcw_X7F",
+    "unet.pth":       "1FQnPEJcWb_lermLLk40rdt5gCAMJEF6c",
+}
 
-_CHECKPOINT_FILENAMES = [
-    "classifier.pth",
-    "localizer.pth",
-    "unet.pth",
-]
+
+def _install_gdown() -> bool:
+    """Install gdown if missing. Returns True on success."""
+    try:
+        import gdown  # type: ignore  # noqa: F401
+        return True
+    except ImportError:
+        pass
+    try:
+        import subprocess, sys
+        subprocess.check_call(
+            [sys.executable, "-m", "pip", "install", "gdown", "--quiet"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return True
+    except Exception:
+        return False
 
 
 def _ensure_checkpoints(checkpoint_dir: str) -> None:
-    """Download missing checkpoints from Google Drive using gdown."""
+    """Download any missing checkpoints from Google Drive using direct file IDs."""
     missing = [
-        fname for fname in _CHECKPOINT_FILENAMES
+        fname for fname in _CHECKPOINT_GDRIVE_IDS
         if not os.path.exists(os.path.join(checkpoint_dir, fname))
     ]
     if not missing:
         return
 
-    try:
-        import gdown  # type: ignore
-    except ImportError:
-        try:
-            import subprocess, sys
-            subprocess.check_call(
-                [sys.executable, "-m", "pip", "install", "gdown", "-q"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            import gdown  # type: ignore
-        except Exception:
-            print("[multitask] WARNING: gdown not available, cannot auto-download checkpoints.")
-            return
+    if not _install_gdown():
+        print("[multitask] WARNING: could not install gdown — checkpoints will not be downloaded.")
+        return
+
+    import gdown  # type: ignore
 
     os.makedirs(checkpoint_dir, exist_ok=True)
-    print(f"[multitask] Downloading checkpoints from Google Drive into '{checkpoint_dir}' ...")
-    try:
-        gdown.download_folder(
-            id=_GDRIVE_FOLDER_ID,
-            output=checkpoint_dir,
-            quiet=False,
-            use_cookies=False,
-        )
-        print("[multitask] Download complete.")
-    except Exception as exc:
-        print(f"[multitask] WARNING: folder download failed ({exc}). Trying file-by-file ...")
-        # Fallback: list folder and download individually
+    for fname in missing:
+        file_id = _CHECKPOINT_GDRIVE_IDS[fname]
+        dest = os.path.join(checkpoint_dir, fname)
+        url = f"https://drive.google.com/uc?id={file_id}"
+        print(f"[multitask] Downloading {fname} from Google Drive ...")
         try:
-            files = gdown.download_folder(
-                id=_GDRIVE_FOLDER_ID,
-                output=checkpoint_dir,
-                quiet=True,
-                use_cookies=False,
-                skip_download=True,  # just get file list
-            )
-        except Exception:
-            files = []
-        for fname in missing:
-            dest = os.path.join(checkpoint_dir, fname)
-            if os.path.exists(dest):
-                continue
-            print(f"[multitask]   Trying direct download for {fname} ...")
-            # Try common gdown URL pattern
-            try:
-                gdown.download(
-                    f"https://drive.google.com/uc?id={_GDRIVE_FOLDER_ID}",
-                    dest,
-                    quiet=False,
-                    use_cookies=False,
-                    fuzzy=True,
-                )
-            except Exception as e2:
-                print(f"[multitask]   Could not download {fname}: {e2}")
+            gdown.download(url, dest, quiet=False, use_cookies=False, fuzzy=True)
+            print(f"[multitask] {fname} downloaded successfully.")
+        except Exception as exc:
+            print(f"[multitask] WARNING: failed to download {fname}: {exc}")
 
 
 
