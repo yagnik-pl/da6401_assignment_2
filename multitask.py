@@ -12,67 +12,6 @@ from .classification import VGG11Classifier
 from .localization import VGG11Localizer
 from .segmentation import VGG11UNet
 
-<<<<<<< Updated upstream
-# ---------------------------------------------------------------------------
-# Checkpoint auto-download helpers
-# ---------------------------------------------------------------------------
-_CHECKPOINT_GDRIVE_IDS = {
-    "classifier.pth": "1jJ3TOA4pAquLZjp6EThjDByvNIFSYFrN",
-    "localizer.pth":  "1JWIJfl904i02HEvKQJabr_m1iGcw_X7F",
-    "unet.pth":       "1FQnPEJcWb_lermLLk40rdt5gCAMJEF6c",
-}
-
-
-def _install_gdown() -> bool:
-    """Install gdown if missing. Returns True on success."""
-    try:
-        import gdown  # type: ignore  # noqa: F401
-        return True
-    except ImportError:
-        pass
-    try:
-        import subprocess, sys
-        subprocess.check_call(
-            [sys.executable, "-m", "pip", "install", "gdown", "--quiet"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        return True
-    except Exception:
-        return False
-
-
-def _ensure_checkpoints(checkpoint_dir: str) -> None:
-    """Download any missing checkpoints from Google Drive using direct file IDs."""
-    missing = [
-        fname for fname in _CHECKPOINT_GDRIVE_IDS
-        if not os.path.exists(os.path.join(checkpoint_dir, fname))
-    ]
-    if not missing:
-        return
-
-    if not _install_gdown():
-        print("[multitask] WARNING: could not install gdown — checkpoints will not be downloaded.")
-        return
-
-    import gdown  # type: ignore
-
-    os.makedirs(checkpoint_dir, exist_ok=True)
-    for fname in missing:
-        file_id = _CHECKPOINT_GDRIVE_IDS[fname]
-        dest = os.path.join(checkpoint_dir, fname)
-        url = f"https://drive.google.com/uc?id={file_id}"
-        print(f"[multitask] Downloading {fname} from Google Drive ...")
-        try:
-            gdown.download(url, dest, quiet=False, use_cookies=False, fuzzy=True)
-            print(f"[multitask] {fname} downloaded successfully.")
-        except Exception as exc:
-            print(f"[multitask] WARNING: failed to download {fname}: {exc}")
-
-
-
-=======
->>>>>>> Stashed changes
 
 class MultiTaskPerceptionModel(nn.Module):
     """Task-preserving multi-task wrapper built from the best single-task checkpoints."""
