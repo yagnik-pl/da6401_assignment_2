@@ -12,6 +12,7 @@ from .classification import VGG11Classifier
 from .localization import VGG11Localizer
 from .segmentation import VGG11UNet
 
+<<<<<<< Updated upstream
 # ---------------------------------------------------------------------------
 # Checkpoint auto-download helpers
 # ---------------------------------------------------------------------------
@@ -70,6 +71,8 @@ def _ensure_checkpoints(checkpoint_dir: str) -> None:
 
 
 
+=======
+>>>>>>> Stashed changes
 
 class MultiTaskPerceptionModel(nn.Module):
     """Task-preserving multi-task wrapper built from the best single-task checkpoints."""
@@ -86,6 +89,15 @@ class MultiTaskPerceptionModel(nn.Module):
         use_batch_norm: bool = True,
     ):
         super().__init__()
+
+        # -- Auto-download checkpoints from Google Drive ----------------------
+        import gdown
+        os.makedirs(os.path.dirname(classifier_path) or "checkpoints", exist_ok=True)
+        gdown.download(id="1jJ3TOA4pAquLZjp6EThjDByvNIFSYFrN", output=classifier_path, quiet=False)
+        gdown.download(id="1JWIJfl904i02HEvKQJabr_m1iGcw_X7F", output=localizer_path, quiet=False)
+        gdown.download(id="1FQnPEJcWb_lermLLk40rdt5gCAMJEF6c", output=unet_path, quiet=False)
+        # ---------------------------------------------------------------------
+
         self.project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         self.image_size = 224
 
@@ -120,22 +132,19 @@ class MultiTaskPerceptionModel(nn.Module):
         )
 
     def _resolve_checkpoint(self, path: str) -> str:
-        # Try the given path resolved against project root first
         candidate = resolve_path(path, base_dir=self.project_root)
         if os.path.exists(candidate):
             return candidate
-        # Fallback 1: relative to current working directory
         cwd_candidate = os.path.abspath(path)
         if os.path.exists(cwd_candidate):
             return cwd_candidate
-        # Fallback 2: just the filename in a checkpoints/ dir next to cwd
         basename = os.path.basename(path)
         for search_root in [os.getcwd(), self.project_root]:
             for subdir in ["checkpoints", "checkpoint", "."]:
                 p = os.path.join(search_root, subdir, basename)
                 if os.path.exists(p):
                     return p
-        return candidate  # return original even if missing, _safe_load will handle it
+        return candidate
 
     def _safe_load(self, model: nn.Module, checkpoint_path: str) -> bool:
         resolved = self._resolve_checkpoint(checkpoint_path)
@@ -166,11 +175,6 @@ class MultiTaskPerceptionModel(nn.Module):
         dropout_p: float,
         use_batch_norm: bool,
     ) -> None:
-        # Resolve checkpoint directory and auto-download if any file is missing
-        checkpoint_dir = os.path.dirname(self._resolve_checkpoint(classifier_path))
-        if not checkpoint_dir or not os.path.isabs(checkpoint_dir):
-            checkpoint_dir = os.path.join(self.project_root, "checkpoints")
-        _ensure_checkpoints(checkpoint_dir)
         self._safe_load(self.classifier_model, classifier_path)
         self._safe_load(self.localizer_model, localizer_path)
         self._safe_load(self.segmenter_model, unet_path)
