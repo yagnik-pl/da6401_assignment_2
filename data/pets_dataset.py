@@ -96,6 +96,38 @@ def _normalize_image(image: np.ndarray) -> np.ndarray:
     return image
 
 
+def _remap_trimap(mask: np.ndarray) -> np.ndarray:
+    """Map Oxford trimap labels to background-first indices.
+
+    Original labels:
+    1 -> pet
+    2 -> background
+    3 -> border
+
+    Remapped labels used here:
+    0 -> background
+    1 -> pet
+    2 -> border
+    """
+    remapped = np.zeros_like(mask, dtype=np.int64)
+    remapped[mask == 2] = 0
+    remapped[mask == 1] = 1
+    remapped[mask == 3] = 2
+    return remapped
+
+
+def _expand_xyxy_box(xmin: float, ymin: float, xmax: float, ymax: float, width: int, height: int, scale: float):
+    center_x = 0.5 * (xmin + xmax)
+    center_y = 0.5 * (ymin + ymax)
+    box_w = max(xmax - xmin, 1.0) * scale
+    box_h = max(ymax - ymin, 1.0) * scale
+    left = max(0.0, center_x - 0.5 * box_w)
+    top = max(0.0, center_y - 0.5 * box_h)
+    right = min(float(width), center_x + 0.5 * box_w)
+    bottom = min(float(height), center_y + 0.5 * box_h)
+    return left, top, right, bottom
+
+
 class _FallbackTransform:
     """Lightweight transform path when albumentations is unavailable."""
 
@@ -146,6 +178,8 @@ class OxfordIIITPetDataset(Dataset):
         seed: int = 42,
         augment: bool = False,
         download: bool = False,
+        crop_to_bbox: bool = False,
+        crop_scale: float = 2.2,
     ):
         self.root = os.path.abspath(root)
         self.split = split
@@ -153,6 +187,8 @@ class OxfordIIITPetDataset(Dataset):
         self.augment = augment
         self.val_ratio = val_ratio
         self.seed = seed
+        self.crop_to_bbox = crop_to_bbox
+        self.crop_scale = crop_scale
 
         if download:
             download_oxford_pet(self.root)
@@ -213,7 +249,10 @@ class OxfordIIITPetDataset(Dataset):
             transforms.extend(
                 [
                     A.HorizontalFlip(p=0.5),
-                    A.RandomBrightnessContrast(p=0.3),
+                    A.ShiftScaleRotate(shift_limit=0.06, scale_limit=0.15, rotate_limit=15, border_mode=0, p=0.5),
+                    A.RandomBrightnessContrast(brightness_limit=0.3, contrast_limit=0.3, p=0.5),
+                    A.HueSaturationValue(hue_shift_limit=10, sat_shift_limit=20, val_shift_limit=15, p=0.3),
+                    A.GaussianBlur(blur_limit=(3, 5), p=0.2),
                 ]
             )
         transforms.extend(
@@ -224,7 +263,7 @@ class OxfordIIITPetDataset(Dataset):
         )
         return A.Compose(
             transforms,
-            bbox_params=A.BboxParams(format="pascal_voc", label_fields=["bbox_labels"]),
+            bbox_params=A.BboxParams(format="pascal_voc", label_fields=["bbox_labels"], min_visibility=0.0),
         )
 
     def __len__(self) -> int:
@@ -237,10 +276,36 @@ class OxfordIIITPetDataset(Dataset):
         xml_path = os.path.join(self.xml_dir, f"{image_id}.xml")
 
         image = np.asarray(Image.open(image_path).convert("RGB"))
-        mask = np.asarray(Image.open(trimap_path), dtype=np.int64) - 1
-        mask = np.clip(mask, 0, 2)
+        mask = _remap_trimap(np.asarray(Image.open(trimap_path), dtype=np.int64))
         bbox_xyxy = _parse_bbox(xml_path)
         original_size = np.asarray(image.shape[:2], dtype=np.int64)
+
+        if self.crop_to_bbox:
+            orig_h, orig_w = image.shape[:2]
+            xmin, ymin, xmax, ymax = bbox_xyxy
+            crop_left, crop_top, crop_right, crop_bottom = _expand_xyxy_box(
+                xmin,
+                ymin,
+                xmax,
+                ymax,
+                width=orig_w,
+                height=orig_h,
+                scale=self.crop_scale,
+            )
+            left_i = int(np.floor(crop_left))
+            top_i = int(np.floor(crop_top))
+            right_i = int(np.ceil(crop_right))
+            bottom_i = int(np.ceil(crop_bottom))
+
+            image = image[top_i:bottom_i, left_i:right_i]
+            mask = mask[top_i:bottom_i, left_i:right_i]
+            bbox_xyxy = (
+                xmin - left_i,
+                ymin - top_i,
+                xmax - left_i,
+                ymax - top_i,
+            )
+            original_size = np.asarray(image.shape[:2], dtype=np.int64)
 
         if A is None:
             image, mask, bbox_xyxy = self.transform(image=image, mask=mask, bbox=bbox_xyxy)
@@ -253,7 +318,9 @@ class OxfordIIITPetDataset(Dataset):
             )
             image = transformed["image"]
             mask = transformed["mask"]
-            bbox_xyxy = transformed["bboxes"][0]
+            if transformed["bboxes"]:
+                bbox_xyxy = transformed["bboxes"][0]
+            # else bbox_xyxy keeps its pre-transform value (already in resized space via Resize)
 
         xmin, ymin, xmax, ymax = bbox_xyxy
         bbox_xywh = np.asarray(

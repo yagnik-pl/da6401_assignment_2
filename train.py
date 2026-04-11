@@ -48,8 +48,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--optimizer", type=str, default="adam", choices=["adam", "adamw", "sgd"])
     parser.add_argument("--momentum", type=float, default=0.9)
     parser.add_argument("--dropout_p", type=float, default=0.5)
+    parser.add_argument("--label_smoothing", type=float, default=0.1)
     parser.add_argument("--use_batch_norm", type=str2bool, default=True)
     parser.add_argument("--freeze_strategy", type=str, default="none", choices=["none", "strict", "partial"])
+    parser.add_argument("--pretrained", type=str2bool, default=False,
+                        help="Bootstrap encoder from torchvision VGG11-BN ImageNet weights before training.")
+    parser.add_argument("--warmup_epochs", type=int, default=5,
+                        help="Number of linear LR warm-up epochs before cosine decay kicks in.")
     parser.add_argument("--load_encoder_from_classifier", type=str2bool, default=True)
     parser.add_argument("--classifier_checkpoint", type=str, default="checkpoints/classifier.pth")
     parser.add_argument("--localizer_checkpoint", type=str, default="checkpoints/localizer.pth")
@@ -145,6 +150,28 @@ def build_dataloaders(args: argparse.Namespace, device: torch.device):
     return train_loader, val_loader, test_loader
 
 
+def _load_pretrained_encoder(model: nn.Module) -> None:
+    """Attempt to load ImageNet pretrained weights into any VGG11Encoder found in *model*."""
+    # Direct encoder (classification / localization / segmentation tasks)
+    encoder = getattr(model, "encoder", None)
+    if encoder is not None and hasattr(encoder, "load_pretrained_weights"):
+        ok = encoder.load_pretrained_weights()
+        if ok:
+            print("  [pretrained] Loaded ImageNet VGG11-BN weights into encoder.")
+        return
+    # MultiTaskPerceptionModel: initialise each sub-model's encoder separately so that
+    # all three tasks start from the same strong feature extractor.
+    for attr in ("classifier_model", "localizer_model", "segmenter_model"):
+        sub = getattr(model, attr, None)
+        if sub is None:
+            continue
+        enc = getattr(sub, "encoder", None)
+        if enc is not None and hasattr(enc, "load_pretrained_weights"):
+            ok = enc.load_pretrained_weights()
+            if ok:
+                print(f"  [pretrained] Loaded ImageNet VGG11-BN weights into {attr}.encoder.")
+
+
 def freeze_encoder_layers(encoder: nn.Module, strategy: str) -> None:
     for parameter in encoder.parameters():
         parameter.requires_grad = True
@@ -172,7 +199,7 @@ def load_classifier_encoder_weights(model: nn.Module, checkpoint_path: str, args
     )
     checkpoint = torch.load(resolved, map_location="cpu")
     state_dict = checkpoint["state_dict"] if isinstance(checkpoint, dict) and "state_dict" in checkpoint else checkpoint
-    pretrained.load_state_dict(state_dict, strict=True)
+    pretrained.load_state_dict(state_dict, strict=False)
     model.encoder.load_state_dict(pretrained.encoder.state_dict(), strict=False)
 
 
@@ -214,12 +241,30 @@ def build_model(args: argparse.Namespace, device: torch.device) -> nn.Module:
             use_batch_norm=args.use_batch_norm,
         )
 
+    if getattr(args, "pretrained", False):
+        _load_pretrained_encoder(model)
+
     if hasattr(model, "encoder"):
         freeze_encoder_layers(model.encoder, args.freeze_strategy)
     return model.to(device)
 
 
 def build_optimizer(args: argparse.Namespace, model: nn.Module):
+    # When using a pretrained encoder, use a 10x smaller LR for the backbone so that
+    # fine-tuned features are not destroyed by the larger head learning rate.
+    if getattr(args, "pretrained", False) and hasattr(model, "encoder"):
+        encoder_params = [p for p in model.encoder.parameters() if p.requires_grad]
+        head_params = [p for n, p in model.named_parameters() if p.requires_grad and not n.startswith("encoder.")]
+        param_groups = [
+            {"params": encoder_params, "lr": args.learning_rate * 0.1},
+            {"params": head_params,    "lr": args.learning_rate},
+        ]
+        if args.optimizer == "sgd":
+            return torch.optim.SGD(param_groups, momentum=args.momentum, weight_decay=args.weight_decay)
+        if args.optimizer == "adamw":
+            return torch.optim.AdamW(param_groups, weight_decay=args.weight_decay)
+        return torch.optim.Adam(param_groups, weight_decay=args.weight_decay)
+
     parameters = [parameter for parameter in model.parameters() if parameter.requires_grad]
     if args.optimizer == "sgd":
         return torch.optim.SGD(parameters, lr=args.learning_rate, momentum=args.momentum, weight_decay=args.weight_decay)
@@ -269,7 +314,8 @@ def compute_losses_and_stats(
     if "localization" in outputs:
         target_boxes = batch["bbox"].to(device)
         pred_boxes = outputs["localization"]
-        mse_value = mse_criterion(pred_boxes, target_boxes)
+        scale = float(args.image_size)
+        mse_value = mse_criterion(pred_boxes / scale, target_boxes / scale)
         iou_loss_value = iou_criterion(pred_boxes, target_boxes)
         iou_value = box_iou_xywh(pred_boxes.detach(), target_boxes.detach()).mean()
         loss = loss + args.bbox_mse_weight * mse_value + args.bbox_iou_weight * iou_loss_value
@@ -357,7 +403,7 @@ def run_epoch(
     training = optimizer is not None
     model.train(training)
 
-    cls_criterion = nn.CrossEntropyLoss()
+    cls_criterion = nn.CrossEntropyLoss(label_smoothing=args.label_smoothing)
     mse_criterion = nn.MSELoss()
     iou_criterion = IoULoss(reduction="mean")
     seg_criterion = nn.CrossEntropyLoss()
@@ -380,6 +426,7 @@ def run_epoch(
         if training:
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
             optimizer.step()
 
         batch_size = images.size(0)
@@ -436,20 +483,28 @@ def default_checkpoint_name(task: str) -> str:
     return mapping[task]
 
 
-def maybe_resume(model: nn.Module, optimizer, resume_path: str, device: torch.device):
+def maybe_resume(model: nn.Module, optimizer, resume_path: str, device: torch.device, learning_rate: float):
     if not resume_path:
         return 0, float("-inf")
     resolved = resolve_path(resume_path)
     if not os.path.exists(resolved):
         return 0, float("-inf")
 
-    checkpoint = torch.load(resolved, map_location=device)
+    checkpoint = torch.load(resolved, map_location=device, weights_only=False)
     state_dict = checkpoint["state_dict"] if isinstance(checkpoint, dict) and "state_dict" in checkpoint else checkpoint
     model.load_state_dict(state_dict, strict=True)
     if isinstance(checkpoint, dict) and "optimizer_state" in checkpoint:
-        optimizer.load_state_dict(checkpoint["optimizer_state"])
-    start_epoch = int(checkpoint.get("epoch", 0))
-    best_metric = float(checkpoint.get("best_metric", float("-inf")))
+        try:
+            optimizer.load_state_dict(checkpoint["optimizer_state"])
+            for param_group in optimizer.param_groups:
+                param_group["lr"] = learning_rate
+        except (ValueError, KeyError):
+            # Optimizer param-group mismatch (e.g. pretrained vs non-pretrained run).
+            # Safe to ignore — LR scheduler will set the LR correctly.
+            for param_group in optimizer.param_groups:
+                param_group["lr"] = learning_rate
+    start_epoch = int(checkpoint.get("epoch", 0)) if isinstance(checkpoint, dict) else 0
+    best_metric = float(checkpoint.get("best_metric", float("-inf"))) if isinstance(checkpoint, dict) else float("-inf")
     return start_epoch, best_metric
 
 
@@ -471,10 +526,25 @@ def main():
     train_loader, val_loader, test_loader = build_dataloaders(args, device)
     model = build_model(args, device)
     optimizer = build_optimizer(args, model)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="max", factor=0.5, patience=2)
 
-    start_epoch, best_score = maybe_resume(model, optimizer, args.resume, device)
+    start_epoch, best_score = maybe_resume(model, optimizer, args.resume, device, args.learning_rate)
     checkpoint_path = resolve_path(os.path.join(args.checkpoint_dir, default_checkpoint_name(args.task)))
+
+    remaining_epochs = max(args.epochs - start_epoch, 1)
+    warmup_epochs = min(getattr(args, "warmup_epochs", 5), remaining_epochs)
+    cosine_epochs = max(remaining_epochs - warmup_epochs, 1)
+
+    warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
+        optimizer, start_factor=0.1, end_factor=1.0, total_iters=warmup_epochs
+    )
+    cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=cosine_epochs, eta_min=args.learning_rate * 1e-3
+    )
+    scheduler = torch.optim.lr_scheduler.SequentialLR(
+        optimizer,
+        schedulers=[warmup_scheduler, cosine_scheduler],
+        milestones=[warmup_epochs],
+    )
 
     for epoch in range(start_epoch, args.epochs):
         train_metrics = run_epoch(args, model, train_loader, device, optimizer=optimizer)
@@ -482,7 +552,7 @@ def main():
             val_metrics = run_epoch(args, model, val_loader, device, optimizer=None)
 
         current_score = score_from_metrics(args.task, val_metrics)
-        scheduler.step(current_score)
+        scheduler.step()
 
         print(f"Epoch {epoch + 1}/{args.epochs}")
         print(f"  train: {format_metrics(train_metrics)}")

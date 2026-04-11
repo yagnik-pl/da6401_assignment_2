@@ -78,6 +78,39 @@ class VGG11Encoder(nn.Module):
                 nn.init.ones_(module.weight)
                 nn.init.zeros_(module.bias)
 
+    def load_pretrained_weights(self) -> bool:
+        """Load ImageNet-pretrained VGG11-BN weights into this encoder.
+
+        Maps torchvision VGG11_BN feature layers directly onto the matching
+        SingleConvBlock / DoubleConvBlock sub-modules. Returns True on success.
+        """
+        try:
+            import torchvision.models as tvm  # type: ignore
+
+            try:
+                pretrained_model = tvm.vgg11_bn(weights=tvm.VGG11_BN_Weights.IMAGENET1K_V1)
+            except AttributeError:
+                pretrained_model = tvm.vgg11_bn(pretrained=True)  # older torchvision
+
+            src = pretrained_model.features
+            # (torchvision layer index, destination sub-module) pairs for VGG11-BN
+            copy_pairs = [
+                (0,  self.block1.conv), (1,  self.block1.bn),
+                (4,  self.block2.conv), (5,  self.block2.bn),
+                (8,  self.block3.conv1),(9,  self.block3.bn1),
+                (11, self.block3.conv2),(12, self.block3.bn2),
+                (15, self.block4.conv1),(16, self.block4.bn1),
+                (18, self.block4.conv2),(19, self.block4.bn2),
+                (22, self.block5.conv1),(23, self.block5.bn1),
+                (25, self.block5.conv2),(26, self.block5.bn2),
+            ]
+            for idx, dst_layer in copy_pairs:
+                dst_layer.load_state_dict(src[idx].state_dict())
+            del pretrained_model
+            return True
+        except Exception:
+            return False
+
     def forward(
         self, x: torch.Tensor, return_features: bool = False
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, torch.Tensor]]]:
@@ -109,22 +142,29 @@ class VGG11Encoder(nn.Module):
 
 
 class ClassificationHead(nn.Module):
-    """Standard VGG classifier head with BatchNorm and custom dropout."""
+    """Compact classifier head that is easier to train than the full 4096x4096 stack."""
 
-    def __init__(self, num_classes: int = 37, dropout_p: float = 0.5, use_batch_norm: bool = True):
+    def __init__(
+        self,
+        num_classes: int = 37,
+        dropout_p: float = 0.5,
+        use_batch_norm: bool = True,
+        hidden_dim1: int = 1024,
+        hidden_dim2: int = 512,
+    ):
         super().__init__()
         self.avgpool = nn.AdaptiveAvgPool2d((7, 7))
         self.classifier = nn.Sequential(
             nn.Flatten(),
-            nn.Linear(512 * 7 * 7, 4096),
-            nn.BatchNorm1d(4096) if use_batch_norm else nn.Identity(),
+            nn.Linear(512 * 7 * 7, hidden_dim1),
+            nn.BatchNorm1d(hidden_dim1) if use_batch_norm else nn.Identity(),
             nn.ReLU(inplace=True),
             CustomDropout(dropout_p),
-            nn.Linear(4096, 4096),
-            nn.BatchNorm1d(4096) if use_batch_norm else nn.Identity(),
+            nn.Linear(hidden_dim1, hidden_dim2),
+            nn.BatchNorm1d(hidden_dim2) if use_batch_norm else nn.Identity(),
             nn.ReLU(inplace=True),
             CustomDropout(dropout_p),
-            nn.Linear(4096, num_classes),
+            nn.Linear(hidden_dim2, num_classes),
         )
         self._init_weights()
 

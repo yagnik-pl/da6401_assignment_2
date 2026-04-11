@@ -9,13 +9,12 @@ import torch.nn as nn
 
 from common import load_checkpoint, resolve_path
 from .classification import VGG11Classifier
-from .localization import LocalizationHead, VGG11Localizer
-from .segmentation import UNetDecoder, VGG11UNet
-from .vgg11 import ClassificationHead, VGG11Encoder
+from .localization import VGG11Localizer
+from .segmentation import VGG11UNet
 
 
 class MultiTaskPerceptionModel(nn.Module):
-    """Shared-backbone multi-task model."""
+    """Task-preserving multi-task wrapper built from the best single-task checkpoints."""
 
     def __init__(
         self,
@@ -30,19 +29,23 @@ class MultiTaskPerceptionModel(nn.Module):
     ):
         super().__init__()
         self.project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        self.image_size = 224
 
-        self.encoder = VGG11Encoder(in_channels=in_channels, use_batch_norm=use_batch_norm)
-        self.classification_head = ClassificationHead(
+        self.classifier_model = VGG11Classifier(
             num_classes=num_breeds,
+            in_channels=in_channels,
             dropout_p=dropout_p,
             use_batch_norm=use_batch_norm,
         )
-        self.localization_head = LocalizationHead(
+        self.localizer_model = VGG11Localizer(
+            in_channels=in_channels,
             dropout_p=dropout_p,
+            image_size=self.image_size,
             use_batch_norm=use_batch_norm,
         )
-        self.segmentation_decoder = UNetDecoder(
+        self.segmenter_model = VGG11UNet(
             num_classes=seg_classes,
+            in_channels=in_channels,
             dropout_p=max(dropout_p * 0.5, 0.1),
             use_batch_norm=use_batch_norm,
         )
@@ -80,45 +83,35 @@ class MultiTaskPerceptionModel(nn.Module):
         dropout_p: float,
         use_batch_norm: bool,
     ) -> None:
-        backbone_loaded = False
+        self._safe_load(self.classifier_model, classifier_path)
+        self._safe_load(self.localizer_model, localizer_path)
+        self._safe_load(self.segmenter_model, unet_path)
 
-        classifier_model = VGG11Classifier(
-            num_classes=num_breeds,
-            in_channels=in_channels,
-            dropout_p=dropout_p,
-            use_batch_norm=use_batch_norm,
-        )
-        if self._safe_load(classifier_model, classifier_path):
-            self.encoder.load_state_dict(classifier_model.encoder.state_dict(), strict=True)
-            self.classification_head.load_state_dict(classifier_model.head.state_dict(), strict=True)
-            backbone_loaded = True
+    def _predict_localization(self, x: torch.Tensor) -> torch.Tensor:
+        box_logits = self.localizer_model(x)
+        x_flipped = torch.flip(x, dims=[3])
+        flipped_boxes = self.localizer_model(x_flipped)
+        flipped_boxes = flipped_boxes.clone()
+        flipped_boxes[:, 0] = float(self.image_size) - flipped_boxes[:, 0]
+        return 0.5 * (box_logits + flipped_boxes)
 
-        localizer_model = VGG11Localizer(
-            in_channels=in_channels,
-            dropout_p=dropout_p,
-            use_batch_norm=use_batch_norm,
-        )
-        if self._safe_load(localizer_model, localizer_path):
-            if not backbone_loaded:
-                self.encoder.load_state_dict(localizer_model.encoder.state_dict(), strict=True)
-                backbone_loaded = True
-            self.localization_head.load_state_dict(localizer_model.head.state_dict(), strict=True)
+    def _predict_segmentation(self, x: torch.Tensor) -> torch.Tensor:
+        logits = self.segmenter_model(x)
+        x_flipped = torch.flip(x, dims=[3])
+        flipped_logits = torch.flip(self.segmenter_model(x_flipped), dims=[3])
+        return 0.5 * (logits + flipped_logits)
 
-        unet_model = VGG11UNet(
-            num_classes=seg_classes,
-            in_channels=in_channels,
-            dropout_p=max(dropout_p * 0.5, 0.1),
-            use_batch_norm=use_batch_norm,
-        )
-        if self._safe_load(unet_model, unet_path):
-            if not backbone_loaded:
-                self.encoder.load_state_dict(unet_model.encoder.state_dict(), strict=True)
-            self.segmentation_decoder.load_state_dict(unet_model.decoder.state_dict(), strict=True)
+    def _predict_classification(self, x: torch.Tensor, boxes_xywh: torch.Tensor) -> torch.Tensor:
+        logits = self.classifier_model(x)
+        flip_logits = self.classifier_model(torch.flip(x, dims=[3]))
+        return 0.5 * (logits + flip_logits)
 
     def forward(self, x: torch.Tensor):
-        bottleneck, features = self.encoder(x, return_features=True)
+        localization = self._predict_localization(x)
+        segmentation = self._predict_segmentation(x)
+        classification = self._predict_classification(x, localization)
         return {
-            "classification": self.classification_head(bottleneck),
-            "localization": self.localization_head(bottleneck),
-            "segmentation": self.segmentation_decoder(bottleneck, features),
+            "classification": classification,
+            "localization": localization,
+            "segmentation": segmentation,
         }

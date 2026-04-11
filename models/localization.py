@@ -14,18 +14,18 @@ class LocalizationHead(nn.Module):
     def __init__(self, dropout_p: float = 0.5, image_size: int = DEFAULT_IMAGE_SIZE, use_batch_norm: bool = True):
         super().__init__()
         self.image_size = float(image_size)
-        self.pool = nn.AdaptiveAvgPool2d((1, 1))
+        self.pool = nn.AdaptiveAvgPool2d((7, 7))
         self.regressor = nn.Sequential(
             nn.Flatten(),
-            nn.Linear(512, 512),
-            nn.BatchNorm1d(512) if use_batch_norm else nn.Identity(),
+            nn.Linear(512 * 7 * 7, 1024),
+            nn.BatchNorm1d(1024) if use_batch_norm else nn.Identity(),
             nn.ReLU(inplace=True),
             CustomDropout(dropout_p),
-            nn.Linear(512, 128),
-            nn.BatchNorm1d(128) if use_batch_norm else nn.Identity(),
+            nn.Linear(1024, 256),
+            nn.BatchNorm1d(256) if use_batch_norm else nn.Identity(),
             nn.ReLU(inplace=True),
             CustomDropout(dropout_p),
-            nn.Linear(128, 4),
+            nn.Linear(256, 4),
             nn.Sigmoid(),
         )
         self._init_weights()

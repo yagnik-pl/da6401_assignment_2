@@ -86,6 +86,50 @@ def xywh_to_xyxy(boxes: torch.Tensor) -> torch.Tensor:
     return torch.cat([top_left, bottom_right], dim=-1)
 
 
+def xyxy_to_xywh(boxes: torch.Tensor) -> torch.Tensor:
+    """Convert [x1, y1, x2, y2] boxes to center-size format."""
+    top_left = boxes[..., :2]
+    bottom_right = boxes[..., 2:]
+    centers = 0.5 * (top_left + bottom_right)
+    sizes = (bottom_right - top_left).clamp_min(1.0)
+    return torch.cat([centers, sizes], dim=-1)
+
+
+def expand_boxes_xywh(boxes: torch.Tensor, scale: float = 2.0, image_size: int = DEFAULT_IMAGE_SIZE) -> torch.Tensor:
+    """Expand xywh boxes by a scale factor while staying inside the image."""
+    xyxy = xywh_to_xyxy(boxes)
+    centers = 0.5 * (xyxy[..., :2] + xyxy[..., 2:])
+    sizes = (xyxy[..., 2:] - xyxy[..., :2]).clamp_min(1.0) * scale
+    expanded_xyxy = torch.cat([centers - 0.5 * sizes, centers + 0.5 * sizes], dim=-1)
+    expanded_xyxy[..., 0::2] = expanded_xyxy[..., 0::2].clamp(0.0, float(image_size))
+    expanded_xyxy[..., 1::2] = expanded_xyxy[..., 1::2].clamp(0.0, float(image_size))
+    return xyxy_to_xywh(expanded_xyxy)
+
+
+def crop_and_resize_batch(
+    images: torch.Tensor,
+    boxes_xywh: torch.Tensor,
+    output_size: int = DEFAULT_IMAGE_SIZE,
+    expansion_scale: float = 2.0,
+) -> torch.Tensor:
+    """Crop image regions from predicted boxes and resize them back to model input size."""
+    boxes_xywh = expand_boxes_xywh(boxes_xywh, scale=expansion_scale, image_size=images.shape[-1])
+    boxes_xyxy = xywh_to_xyxy(boxes_xywh).round().long()
+    crops = []
+    for image, box in zip(images, boxes_xyxy):
+        x1, y1, x2, y2 = box.tolist()
+        x1 = max(0, min(x1, image.shape[-1] - 1))
+        y1 = max(0, min(y1, image.shape[-2] - 1))
+        x2 = max(x1 + 1, min(x2, image.shape[-1]))
+        y2 = max(y1 + 1, min(y2, image.shape[-2]))
+        crop = image[:, y1:y2, x1:x2].unsqueeze(0)
+        if crop.shape[-1] <= 1 or crop.shape[-2] <= 1:
+            crop = image.unsqueeze(0)
+        crop = F.interpolate(crop, size=(output_size, output_size), mode="bilinear", align_corners=False)
+        crops.append(crop.squeeze(0))
+    return torch.stack(crops, dim=0)
+
+
 def box_iou_xywh(pred_boxes: torch.Tensor, target_boxes: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
     """Compute IoU for batches of xywh boxes."""
     pred_xyxy = xywh_to_xyxy(pred_boxes)
