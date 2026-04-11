@@ -1,3 +1,5 @@
+"""Unified multi-task model."""
+
 from __future__ import annotations
 
 import os
@@ -12,7 +14,7 @@ from .segmentation import VGG11UNet
 
 
 class MultiTaskPerceptionModel(nn.Module):
-   
+    """Task-preserving multi-task wrapper built from the best single-task checkpoints."""
 
     def __init__(
         self,
@@ -27,12 +29,17 @@ class MultiTaskPerceptionModel(nn.Module):
     ):
         super().__init__()
 
-        
-        import gdown
+        # -- Auto-install gdown and download checkpoints from Google Drive ----
+        import subprocess, sys
+        try:
+            import gdown
+        except ImportError:
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "gdown", "-q"])
+            import gdown
         os.makedirs(os.path.dirname(classifier_path) or "checkpoints", exist_ok=True)
         gdown.download(id="1jJ3TOA4pAquLZjp6EThjDByvNIFSYFrN", output=classifier_path, quiet=False, fuzzy=True)
         gdown.download(id="1JWIJfl904i02HEvKQJabr_m1iGcw_X7F", output=localizer_path, quiet=False, fuzzy=True)
-        gdown.download(id="12A4qySv3bTa3sP_-4lJa3qQ5Ue7h40Pa", output=unet_path, quiet=False, fuzzy=True)
+        gdown.download(id="1j8br-30Nsf3-IWjl-EH7Mj8v2aXgqoUP", output=unet_path,       quiet=False, fuzzy=True)
         # ---------------------------------------------------------------------
 
         self.project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
