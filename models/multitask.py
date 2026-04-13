@@ -40,7 +40,7 @@ class MultiTaskPerceptionModel(nn.Module):
         if not os.path.exists(localizer_path):
             gdown.download(id="1tV6OMUdGxy77Xtr9XoqIcvY2cT5M-GmV", output=localizer_path, quiet=False, fuzzy=True)
         if not os.path.exists(unet_path):
-            gdown.download(id="1iw_WEUnZw8S7V2MWJwxI7N3ydhSOeZEQ", output=unet_path, quiet=False, fuzzy=True)
+            gdown.download(id="14f0u3LyazVmd69Xn8uv01F9apbBMWo4F",output=unet_path, quiet=False, fuzzy=True)
         # ---------------------------------------------------------------------
 
         self.project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
