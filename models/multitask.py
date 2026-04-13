@@ -124,29 +124,35 @@ class MultiTaskPerceptionModel(nn.Module):
         self._safe_load(self.localizer_model, localizer_path)
         self._safe_load(self.segmenter_model, unet_path)
 
-    def _predict_localization(self, x: torch.Tensor) -> torch.Tensor:
-        box_logits = self.localizer_model(x)
-        x_flipped = torch.flip(x, dims=[3])
-        flipped_boxes = self.localizer_model(x_flipped)
-        flipped_boxes = flipped_boxes.clone()
+    def _predict_localization(self, bottleneck: torch.Tensor, bottleneck_f: torch.Tensor) -> torch.Tensor:
+        box_logits = self.localizer_model.head(bottleneck)
+        flipped_boxes = self.localizer_model.head(bottleneck_f).clone()
         flipped_boxes[:, 0] = float(self.image_size) - flipped_boxes[:, 0]
         return 0.5 * (box_logits + flipped_boxes)
 
-    def _predict_segmentation(self, x: torch.Tensor) -> torch.Tensor:
-        logits = self.segmenter_model(x)
-        x_flipped = torch.flip(x, dims=[3])
-        flipped_logits = torch.flip(self.segmenter_model(x_flipped), dims=[3])
+    def _predict_segmentation(self, bottleneck: torch.Tensor, skips: dict, bottleneck_f: torch.Tensor, skips_f: dict) -> torch.Tensor:
+        logits = self.segmenter_model.decoder(bottleneck, skips)
+        flipped_logits = torch.flip(self.segmenter_model.decoder(bottleneck_f, skips_f), dims=[3])
         return 0.5 * (logits + flipped_logits)
 
-    def _predict_classification(self, x: torch.Tensor, boxes_xywh: torch.Tensor) -> torch.Tensor:
-        logits = self.classifier_model(x)
-        flip_logits = self.classifier_model(torch.flip(x, dims=[3]))
+    def _predict_classification(self, bottleneck: torch.Tensor, bottleneck_f: torch.Tensor) -> torch.Tensor:
+        logits = self.classifier_model.head(bottleneck)
+        flip_logits = self.classifier_model.head(bottleneck_f)
         return 0.5 * (logits + flip_logits)
 
     def forward(self, x: torch.Tensor):
-        localization = self._predict_localization(x)
-        segmentation = self._predict_segmentation(x)
-        classification = self._predict_classification(x, localization)
+        # 1. Run the shared encoder ONCE on the original image
+        bottleneck, skips = self.classifier_model.encoder(x, return_features=True)
+        
+        # 2. Run the shared encoder ONCE on the flipped image for TTA
+        x_flipped = torch.flip(x, dims=[3])
+        bottleneck_f, skips_f = self.classifier_model.encoder(x_flipped, return_features=True)
+        
+        # 3. Route the pre-computed feature maps to the individual task heads
+        localization = self._predict_localization(bottleneck, bottleneck_f)
+        segmentation = self._predict_segmentation(bottleneck, skips, bottleneck_f, skips_f)
+        classification = self._predict_classification(bottleneck, bottleneck_f)
+        
         return {
             "classification": classification,
             "localization": localization,
