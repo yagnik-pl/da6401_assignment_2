@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import os
+import time
 from typing import Dict, Optional
 
 import torch
@@ -69,6 +71,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--bbox_iou_weight", type=float, default=1.0)
     parser.add_argument("--seg_ce_weight", type=float, default=1.0)
     parser.add_argument("--seg_dice_weight", type=float, default=1.0)
+    parser.add_argument("--output_dir", type=str, default="outputs",
+                        help="Directory for CSV training logs.")
     parser.add_argument("--evaluate_test", action="store_true")
     parser.add_argument("--wandb_mode", type=str, default="disabled", choices=["disabled", "offline", "online"])
     parser.add_argument("--wandb_project", type=str, default="da6401_assignment_2")
@@ -402,6 +406,9 @@ def run_epoch(
 ):
     training = optimizer is not None
     model.train(training)
+    # Keep frozen encoder in eval mode so BatchNorm running stats stay fixed
+    if training and getattr(args, "freeze_strategy", "none") == "strict" and hasattr(model, "encoder"):
+        model.encoder.eval()
 
     cls_criterion = nn.CrossEntropyLoss(label_smoothing=args.label_smoothing)
     mse_criterion = nn.MSELoss()
@@ -546,15 +553,43 @@ def main():
         milestones=[warmup_epochs],
     )
 
+    # ── CSV training log ──────────────────────────────────────────────────
+    output_dir = resolve_path(getattr(args, "output_dir", "outputs"))
+    os.makedirs(output_dir, exist_ok=True)
+    csv_tag = f"{args.task}_dp{args.dropout_p}_bn{int(args.use_batch_norm)}_freeze{args.freeze_strategy}"
+    csv_path = os.path.join(output_dir, f"{csv_tag}_training_log.csv")
+    _mk_map = {
+        "classification": ["loss", "classification_loss", "classification_accuracy", "classification_macro_f1"],
+        "localization": ["loss", "localization_mse", "localization_iou_loss", "localization_iou"],
+        "segmentation": ["loss", "segmentation_ce", "segmentation_dice_loss", "segmentation_dice", "segmentation_pixel_accuracy"],
+        "multitask": [
+            "loss", "classification_loss", "classification_accuracy", "classification_macro_f1",
+            "localization_mse", "localization_iou_loss", "localization_iou",
+            "segmentation_ce", "segmentation_dice_loss", "segmentation_dice", "segmentation_pixel_accuracy",
+        ],
+    }
+    _mk = _mk_map.get(args.task, _mk_map["classification"])
+    csv_fields = (
+        ["epoch", "lr"]
+        + [f"train_{k}" for k in _mk]
+        + [f"val_{k}" for k in _mk]
+        + ["best_score", "epoch_time_s"]
+    )
+    csv_file = open(csv_path, "w", newline="", encoding="utf-8")
+    csv_writer = csv.DictWriter(csv_file, fieldnames=csv_fields)
+    csv_writer.writeheader()
+
     for epoch in range(start_epoch, args.epochs):
+        t0 = time.time()
         train_metrics = run_epoch(args, model, train_loader, device, optimizer=optimizer)
         with torch.no_grad():
             val_metrics = run_epoch(args, model, val_loader, device, optimizer=None)
 
         current_score = score_from_metrics(args.task, val_metrics)
         scheduler.step()
+        dt = time.time() - t0
 
-        print(f"Epoch {epoch + 1}/{args.epochs}")
+        print(f"Epoch {epoch + 1}/{args.epochs}  ({dt:.1f}s)")
         print(f"  train: {format_metrics(train_metrics)}")
         print(f"  val:   {format_metrics(val_metrics)}")
 
@@ -574,6 +609,27 @@ def main():
                 extra={"optimizer_state": optimizer.state_dict(), "config": vars(args)},
             )
             print(f"  saved best checkpoint to {checkpoint_path}")
+
+        # ── CSV row ──
+        csv_row = {
+            "epoch": epoch + 1,
+            "lr": f"{optimizer.param_groups[0]['lr']:.8f}",
+            "best_score": f"{best_score:.6f}",
+            "epoch_time_s": f"{dt:.1f}",
+        }
+        for k, v in train_metrics.items():
+            csv_key = f"train_{k}"
+            if csv_key in csv_fields:
+                csv_row[csv_key] = f"{v:.6f}"
+        for k, v in val_metrics.items():
+            csv_key = f"val_{k}"
+            if csv_key in csv_fields:
+                csv_row[csv_key] = f"{v:.6f}"
+        csv_writer.writerow(csv_row)
+        csv_file.flush()
+
+    csv_file.close()
+    print(f"  CSV log: {csv_path}")
 
     if args.evaluate_test and os.path.exists(checkpoint_path):
         checkpoint = torch.load(checkpoint_path, map_location=device)

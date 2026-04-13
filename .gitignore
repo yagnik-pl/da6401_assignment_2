@@ -5,6 +5,7 @@ data/oxford-iiit-pet/
 *.zip
 *.h5
 *.hdf5
+*.pth
 
 # ── Outputs & logs ────────────────────────────────────────────────────────────
 outputs/

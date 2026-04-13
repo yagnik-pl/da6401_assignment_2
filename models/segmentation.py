@@ -62,16 +62,21 @@ class UpBlock(nn.Module):
 
 
 class UNetDecoder(nn.Module):
-    """Symmetric decoder that mirrors the VGG11 encoder."""
+    """Decoder with progressive channel reduction — slim file ~94 MB."""
 
     def __init__(self, num_classes: int = 3, dropout_p: float = 0.1, use_batch_norm: bool = True):
         super().__init__()
+        # bottleneck=512, enc5=512 → 512
         self.up5 = UpBlock(512, 512, 512, dropout_p=dropout_p, use_batch_norm=use_batch_norm)
-        self.up4 = UpBlock(512, 512, 512, dropout_p=dropout_p, use_batch_norm=use_batch_norm)
-        self.up3 = UpBlock(512, 256, 256, dropout_p=dropout_p, use_batch_norm=use_batch_norm)
-        self.up2 = UpBlock(256, 128, 128, dropout_p=dropout_p, use_batch_norm=use_batch_norm)
-        self.up1 = UpBlock(128, 64, 64, dropout_p=dropout_p, use_batch_norm=use_batch_norm)
-        self.head = nn.Conv2d(64, num_classes, kernel_size=1)
+        # 512 + enc4=512 → 384
+        self.up4 = UpBlock(512, 512, 384, dropout_p=dropout_p, use_batch_norm=use_batch_norm)
+        # 384 + enc3=256 → 128
+        self.up3 = UpBlock(384, 256, 128, dropout_p=dropout_p, use_batch_norm=use_batch_norm)
+        # 128 + enc2=128 → 64
+        self.up2 = UpBlock(128, 128,  64, dropout_p=dropout_p, use_batch_norm=use_batch_norm)
+        # 64  + enc1=64  → 32
+        self.up1 = UpBlock( 64,  64,  32, dropout_p=dropout_p, use_batch_norm=use_batch_norm)
+        self.head = nn.Conv2d(32, num_classes, kernel_size=1)
         self._init_weights()
 
     def _init_weights(self) -> None:

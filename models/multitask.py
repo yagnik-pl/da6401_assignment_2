@@ -1,5 +1,3 @@
-"""Unified multi-task model."""
-
 from __future__ import annotations
 
 import os
@@ -14,7 +12,7 @@ from .segmentation import VGG11UNet
 
 
 class MultiTaskPerceptionModel(nn.Module):
-    """Task-preserving multi-task wrapper built from the best single-task checkpoints."""
+   
 
     def __init__(
         self,
@@ -28,6 +26,15 @@ class MultiTaskPerceptionModel(nn.Module):
         use_batch_norm: bool = True,
     ):
         super().__init__()
+
+        
+        import gdown
+        os.makedirs(os.path.dirname(classifier_path) or "checkpoints", exist_ok=True)
+        gdown.download(id="1wGttbRERn3kiXl9QwoigMIHMdMIMxMew", output=classifier_path, quiet=False, fuzzy=True)
+        gdown.download(id="1tV6OMUdGxy77Xtr9XoqIcvY2cT5M-GmV", output=localizer_path, quiet=False, fuzzy=True)
+        gdown.download(id="1iw_WEUnZw8S7V2MWJwxI7N3ydhSOeZEQ", output=unet_path, quiet=False, fuzzy=True)
+        # ---------------------------------------------------------------------
+
         self.project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         self.image_size = 224
 
@@ -62,15 +69,37 @@ class MultiTaskPerceptionModel(nn.Module):
         )
 
     def _resolve_checkpoint(self, path: str) -> str:
-        return resolve_path(path, base_dir=self.project_root)
+        candidate = resolve_path(path, base_dir=self.project_root)
+        if os.path.exists(candidate):
+            return candidate
+        cwd_candidate = os.path.abspath(path)
+        if os.path.exists(cwd_candidate):
+            return cwd_candidate
+        basename = os.path.basename(path)
+        for search_root in [os.getcwd(), self.project_root]:
+            for subdir in ["checkpoints", "checkpoint", "."]:
+                p = os.path.join(search_root, subdir, basename)
+                if os.path.exists(p):
+                    return p
+        return candidate
 
     def _safe_load(self, model: nn.Module, checkpoint_path: str) -> bool:
         resolved = self._resolve_checkpoint(checkpoint_path)
         if not os.path.exists(resolved):
             return False
-        state_dict = load_checkpoint(resolved, map_location="cpu")
-        model.load_state_dict(state_dict, strict=True)
-        return True
+        try:
+            state_dict = load_checkpoint(resolved, map_location="cpu")
+        except Exception:
+            return False
+        try:
+            model.load_state_dict(state_dict, strict=True)
+            return True
+        except RuntimeError:
+            try:
+                model.load_state_dict(state_dict, strict=False)
+                return True
+            except Exception:
+                return False
 
     def _initialize_from_checkpoints(
         self,
