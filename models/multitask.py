@@ -125,9 +125,8 @@ class MultiTaskPerceptionModel(nn.Module):
         self._safe_load(self.segmenter_model, unet_path)
         
         # Share a single encoder in memory across all three models
-        self.localizer_model.encoder = self.classifier_model.encoder
-        self.segmenter_model.encoder = self.classifier_model.encoder
-
+        self.localizer_model.encoder = self.localizer_model.encoder
+        self.segmenter_model.encoder = self.localizer_model.encoder
     def _predict_localization(self, x: torch.Tensor) -> torch.Tensor:
         box_logits = self.localizer_model(x)
         x_flipped = torch.flip(x, dims=[3])
