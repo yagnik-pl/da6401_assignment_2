@@ -27,8 +27,13 @@ class MultiTaskPerceptionModel(nn.Module):
     ):
         super().__init__()
 
-        
-        import gdown
+        # -- Auto-install gdown and download checkpoints from Google Drive ----
+        import subprocess, sys
+        try:
+            import gdown
+        except ImportError:
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "gdown", "-q"])
+            import gdown
         os.makedirs(os.path.dirname(classifier_path) or "checkpoints", exist_ok=True)
         gdown.download(id="1wGttbRERn3kiXl9QwoigMIHMdMIMxMew", output=classifier_path, quiet=False, fuzzy=True)
         gdown.download(id="1tV6OMUdGxy77Xtr9XoqIcvY2cT5M-GmV", output=localizer_path, quiet=False, fuzzy=True)
