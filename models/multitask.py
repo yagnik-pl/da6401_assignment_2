@@ -142,11 +142,11 @@ class MultiTaskPerceptionModel(nn.Module):
 
     def forward(self, x: torch.Tensor):
         # 1. Run the shared encoder ONCE on the original image
-        bottleneck, skips = self.classifier_model.encoder(x, return_features=True)
+        bottleneck, skips = self.localizer_model.encoder(x, return_features=True)
         
         # 2. Run the shared encoder ONCE on the flipped image for TTA
         x_flipped = torch.flip(x, dims=[3])
-        bottleneck_f, skips_f = self.classifier_model.encoder(x_flipped, return_features=True)
+        bottleneck_f, skips_f = self.localizer_model.encoder(x_flipped, return_features=True)
         
         # 3. Route the pre-computed feature maps to the individual task heads
         localization = self._predict_localization(bottleneck, bottleneck_f)
