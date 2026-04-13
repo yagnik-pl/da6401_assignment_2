@@ -35,9 +35,12 @@ class MultiTaskPerceptionModel(nn.Module):
             subprocess.check_call([sys.executable, "-m", "pip", "install", "gdown", "-q"])
             import gdown
         os.makedirs(os.path.dirname(classifier_path) or "checkpoints", exist_ok=True)
-        gdown.download(id="1wGttbRERn3kiXl9QwoigMIHMdMIMxMew", output=classifier_path, quiet=False, fuzzy=True)
-        gdown.download(id="1tV6OMUdGxy77Xtr9XoqIcvY2cT5M-GmV", output=localizer_path, quiet=False, fuzzy=True)
-        gdown.download(id="1iw_WEUnZw8S7V2MWJwxI7N3ydhSOeZEQ", output=unet_path, quiet=False, fuzzy=True)
+        if not os.path.exists(classifier_path):
+            gdown.download(id="1wGttbRERn3kiXl9QwoigMIHMdMIMxMew", output=classifier_path, quiet=False, fuzzy=True)
+        if not os.path.exists(localizer_path):
+            gdown.download(id="1tV6OMUdGxy77Xtr9XoqIcvY2cT5M-GmV", output=localizer_path, quiet=False, fuzzy=True)
+        if not os.path.exists(unet_path):
+            gdown.download(id="1iw_WEUnZw8S7V2MWJwxI7N3ydhSOeZEQ", output=unet_path, quiet=False, fuzzy=True)
         # ---------------------------------------------------------------------
 
         self.project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -120,6 +123,10 @@ class MultiTaskPerceptionModel(nn.Module):
         self._safe_load(self.classifier_model, classifier_path)
         self._safe_load(self.localizer_model, localizer_path)
         self._safe_load(self.segmenter_model, unet_path)
+        
+        # Share a single encoder in memory across all three models
+        self.localizer_model.encoder = self.classifier_model.encoder
+        self.segmenter_model.encoder = self.classifier_model.encoder
 
     def _predict_localization(self, x: torch.Tensor) -> torch.Tensor:
         box_logits = self.localizer_model(x)
