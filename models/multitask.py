@@ -36,12 +36,11 @@ class MultiTaskPerceptionModel(nn.Module):
             import gdown
         os.makedirs(os.path.dirname(classifier_path) or "checkpoints", exist_ok=True)
         if not os.path.exists(classifier_path):
-            gdown.download(id="1wGttbRERn3kiXl9QwoigMIHMdMIMxMew", output=classifier_path, quiet=False, fuzzy=True)
+            gdown.download(id="1re6kH1RDNXZE0up4isG7lczACYkG6lTx", output=classifier_path, quiet=False, fuzzy=True)
         if not os.path.exists(localizer_path):
-            gdown.download(id="1tV6OMUdGxy77Xtr9XoqIcvY2cT5M-GmV", output=localizer_path, quiet=False, fuzzy=True)
+            gdown.download(id="1WWIeWpT1L5J_snUEqmz9WD8j6rQ095ZL", output=localizer_path, quiet=False, fuzzy=True)
         if not os.path.exists(unet_path):
-            gdown.download(id="14f0u3LyazVmd69Xn8uv01F9apbBMWo4F",output=unet_path, quiet=False, fuzzy=True)
-        # ---------------------------------------------------------------------
+            gdown.download(id="1Etjn2Je51deMqFAz3EDlPPkLnKHRMoyi",output=unet_path, quiet=False, fuzzy=True)
 
         self.project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         self.image_size = 224
