@@ -1,6 +1,6 @@
 
-Link to Report : https://api.wandb.ai/links/ee23b053-indian-institute-of-technology-madras/aidpfilu
-Link to github : https://github.com/yagnik-pl/da6401_assignment_2
+- Link to Report : https://api.wandb.ai/links/ee23b053-indian-institute-of-technology-madras/aidpfilu
+- Link to github : https://github.com/yagnik-pl/da6401_assignment_2
 
 # DA6401 Assignment-2 Skeleton Guide
 
